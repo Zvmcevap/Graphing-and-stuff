@@ -1,0 +1,199 @@
+
+#define PI 3.14159265358979323846
+
+#pragma kernel FunctionKernel
+
+RWStructuredBuffer<float3> _Positions;
+
+uint _Resolution, _FunctionKeyA, _FunctionKeyB;
+float _Step, _Time, _Amp, _Freq, _TransitionProgress;
+
+float2 GetUV(uint3 id)
+{
+    return (id.xy + 0.5) * _Step - 1.0;
+}
+
+void SetPosition(uint3 id, float3 position)
+{
+    if (id.x < _Resolution && id.y < _Resolution)
+    {
+    _Positions[id.x + id.y * _Resolution] = position;
+    }
+}
+
+float3 sinWave(float x, float z, float t, float a, float f)
+{
+    float3 p;
+    p.y = sin(PI * (x + t) * f) * a;
+    p.x = x;
+    p.z = z;
+    return p;
+}
+float3 sinSquareWave(float x, float z, float t, float a, float f)
+{
+    float3 p;
+    p.y = sin(PI * (x + z + t) * f) * a;
+    p.x = x;
+    p.z = z;
+
+    return p;
+
+}
+float3 multiSinWave(float x, float z, float t, float a, float f)
+{
+    float3 p;
+
+    p = sinWave(x, z, t * 0.5, a, f);
+    f *= 2.0;
+    a *= 0.5;
+    p += sinWave(x, z, t, a, f);
+
+    p.y *= (2.0 / 3.0);
+    p.x = x;
+    p.z = z;
+
+    return p;
+}
+float3 multiSquareWave(float u, float z, float t, float a, float f)
+{
+    float3 p;
+    p.y = sinWave(u, z, t * 0.5, a, f).y;
+    p.y += sinWave(z, z, t, a * 0.5, f * 2.0).y;
+    p.y *= sinWave(u + z, z, t * 0.25, a, f).y;
+
+    p.y *= (1.0 / 2.5);
+
+    p.x = u;
+    p.z = z;
+
+    return p;
+}
+float3 Ripple(float u, float v, float t, float a, float f)
+{
+    float d = abs(u);
+    float3 p;
+    p.x = u;
+    p.y = sin(PI * (f * d - t)) * a;
+    p.y /= 1.0 + 10.0 * d;
+    p.z = v;
+    return p;
+}
+float3 rippleSquare(float x, float z, float t, float a, float f)
+{
+    float3 p;
+    float d = sqrt(x * x + z * z);
+
+    p.y = sinWave(d, z, t, a, f).y;
+    p.y /= (1.0 + 10.0 * d);
+
+    p.x = x;
+    p.z = z;
+    return p;
+}
+float3 Sphere(float u, float v, float t, float a, float f)
+{
+    float3 p;
+    float r = 0.9 + a / 20.0 * sin(PI * (6.0 * u + 4.0 * v + t));
+
+    float s = r * cos(0.5 * PI * v);
+
+    p.x = s * sin( PI * u);
+    p.y = r * sin( PI * 0.5 * v);
+    p.z = s * cos( PI * u);
+
+
+    return p;
+}
+float3 SphereWave(float u, float v, float t, float a, float f)
+{
+    float3 p;
+    float r = 0.9 + a / 10.0 * sin(PI * (6.0 * u + 4.0 * v + t));
+    float s = r * cos(0.5f * PI * v);
+
+
+
+    p.x = s * sin(f * PI * u);
+    p.y = r * sin(f * PI * 0.5 * v);
+    p.z = s * cos(f * PI * u);
+
+    float x = sinWave(p.x, v, t, 0.25, 1.0).y;
+    float z = sinWave(p.z, v, t, 0.25, 1.0).y;
+
+    p.x += x;
+    p.z += x;
+
+
+    return p;
+}
+float3 Thorus(float u, float v, float t, float a, float f)
+{
+    float r1 = 0.7 + a * 0.1 * sin(PI * (6.0 * u + 0.5 * t));
+    float r2 = 0.15 + f * 0.05 * sin(PI * (8.0 * u + 4.0 * v + 2.0 * t));
+
+    float s = r1 + r2 * cos(0.5 * PI * v);
+    float3 p;
+    p.x = s * sin(PI * u);
+    p.y = r2 * sin(PI * v);
+    p.z = s * cos(PI * u);
+
+    return p;
+}
+
+
+float3 SelectFunction(float2 uv, float t, float a, float f, int functionKey)
+{
+    switch (functionKey)
+    {
+        case 0:
+            return sinWave(uv.x, uv.y, t, a, f);
+        case 1:
+            return sinSquareWave(uv.x, uv.y, t, a, f);
+        case 2:
+            return multiSinWave(uv.x, uv.y, t, a, f);
+        case 3:
+            return multiSquareWave(uv.x, uv.y, t, a, f);
+        case 4:
+            return Ripple(uv.x, uv.y, t, a, f);
+        case 5:
+            return rippleSquare(uv.x, uv.y, t, a, f);
+        case 6:
+            return Sphere(uv.x, uv.y, t, a, f);
+        case 7:
+            return SphereWave(uv.x, uv.y, t, a, f);
+        case 8:
+            return Thorus(uv.x, uv.y, t, a, f);
+        default:
+        // Handle unknown function key
+            return float3(0, 0, 0);
+    }
+}
+    float3 Transition(float2 uv)
+    {
+        float3 position = lerp(
+			    SelectFunction(uv, _Time, _Amp, _Freq, _FunctionKeyA), 
+                SelectFunction(uv, _Time, _Amp, _Freq, _FunctionKeyB),
+			    _TransitionProgress
+    );
+
+    return position;
+
+    }
+
+	[numthreads(8, 8, 1)]
+	void FunctionKernel (uint3 id: SV_DispatchThreadID) {
+		float2 uv = GetUV(id);
+    
+        float3 position;
+        if (_FunctionKeyA != _FunctionKeyB)
+        {
+            position = Transition(uv);
+        }
+        else
+        {
+            position = SelectFunction(uv, _Time, _Amp, _Freq, _FunctionKeyA);
+        }
+		    SetPosition(id, position);
+	}
+
+
+
